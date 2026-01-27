@@ -1,0 +1,97 @@
+#!/bin/sh
+# CGI script to save/load cached configurations per section
+
+# Cache directory
+CACHE_DIR="/tmp/podkop-subscribe-cache"
+mkdir -p "$CACHE_DIR"
+
+# Read request method
+REQUEST_METHOD="${REQUEST_METHOD:-GET}"
+
+# Set content type
+echo "Content-Type: application/json"
+echo "Access-Control-Allow-Origin: *"
+echo ""
+
+# Parse query string for section_id and mode
+parse_query_string() {
+    local query="${QUERY_STRING}"
+    SECTION_ID=""
+    MODE=""
+    
+    IFS='&'
+    for param in $query; do
+        key="${param%%=*}"
+        value="${param#*=}"
+        # URL decode
+        value=$(echo "$value" | sed 's/+/ /g; s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g' | xargs -0 printf '%b')
+        
+        case "$key" in
+            section_id) SECTION_ID="$value" ;;
+            mode) MODE="$value" ;;
+        esac
+    done
+}
+
+# GET - load cached configs
+if [ "$REQUEST_METHOD" = "GET" ]; then
+    parse_query_string
+    
+    if [ -z "$SECTION_ID" ] || [ -z "$MODE" ]; then
+        echo '{"error": "Missing section_id or mode parameter"}'
+        exit 1
+    fi
+    
+    CACHE_FILE="$CACHE_DIR/${SECTION_ID}_${MODE}.json"
+    
+    if [ -f "$CACHE_FILE" ]; then
+        cat "$CACHE_FILE"
+    else
+        echo '{"configs": []}'
+    fi
+    
+# POST - save configs to cache
+elif [ "$REQUEST_METHOD" = "POST" ]; then
+    # Read POST data
+    read -r POST_DATA
+    
+    # Extract section_id and mode from JSON
+    SECTION_ID=$(echo "$POST_DATA" | jsonfilter -e '@.section_id' 2>/dev/null)
+    MODE=$(echo "$POST_DATA" | jsonfilter -e '@.mode' 2>/dev/null)
+    
+    if [ -z "$SECTION_ID" ] || [ -z "$MODE" ]; then
+        echo '{"error": "Missing section_id or mode in POST data"}'
+        exit 1
+    fi
+    
+    CACHE_FILE="$CACHE_DIR/${SECTION_ID}_${MODE}.json"
+    
+    # Save the configs to cache file
+    echo "$POST_DATA" | jsonfilter -e '@.data' > "$CACHE_FILE" 2>/dev/null || {
+        echo '{"error": "Failed to save cache"}'
+        exit 1
+    }
+    
+    echo '{"success": true}'
+    
+# DELETE - clear cache
+elif [ "$REQUEST_METHOD" = "DELETE" ]; then
+    parse_query_string
+    
+    if [ -z "$SECTION_ID" ] || [ -z "$MODE" ]; then
+        echo '{"error": "Missing section_id or mode parameter"}'
+        exit 1
+    fi
+    
+    CACHE_FILE="$CACHE_DIR/${SECTION_ID}_${MODE}.json"
+    
+    if [ -f "$CACHE_FILE" ]; then
+        rm -f "$CACHE_FILE"
+        echo '{"success": true}'
+    else
+        echo '{"success": true, "message": "Cache file not found"}'
+    fi
+else
+    echo '{"error": "Unsupported request method"}'
+    exit 1
+fi

@@ -115,6 +115,13 @@ wget -q -O /www/cgi-bin/podkop-xray-config "${BASE_URL}/www/cgi-bin/podkop-xray-
 }
 chmod +x /www/cgi-bin/podkop-xray-config
 
+echo "  - Installing podkop-configs-cache..."
+wget -q -O /www/cgi-bin/podkop-configs-cache "${BASE_URL}/www/cgi-bin/podkop-configs-cache" || {
+    echo "Error: Failed to download podkop-configs-cache"
+    exit 1
+}
+chmod +x /www/cgi-bin/podkop-configs-cache
+
 # Download JavaScript files
 echo "  - Installing section.js..."
 wget -q -O /www/luci-static/resources/view/podkop/section.js "${BASE_URL}/www/luci-static/resources/view/podkop/section.js" || {

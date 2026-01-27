@@ -32,6 +32,12 @@ if [ -f /www/cgi-bin/podkop-xray-config ]; then
     PLUGIN_REMOVED=1
 fi
 
+if [ -f /www/cgi-bin/podkop-configs-cache ]; then
+    rm -f /www/cgi-bin/podkop-configs-cache
+    echo "  ✓ Removed: /www/cgi-bin/podkop-configs-cache"
+    PLUGIN_REMOVED=1
+fi
+
 # Remove JavaScript files
 if [ -f /www/luci-static/resources/view/podkop/subscribe.js ]; then
     rm -f /www/luci-static/resources/view/podkop/subscribe.js
@@ -151,7 +157,17 @@ if [ "$RESTORED" -eq 0 ]; then
 fi
 
 echo ""
-echo "Step 4: Restarting uhttpd..."
+echo "Step 4: Cleaning cache directory..."
+
+if [ -d /tmp/podkop-subscribe-cache ]; then
+    rm -rf /tmp/podkop-subscribe-cache
+    echo "  ✓ Removed: /tmp/podkop-subscribe-cache"
+else
+    echo "  ℹ Cache directory not found"
+fi
+
+echo ""
+echo "Step 5: Restarting uhttpd..."
 /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 
 echo ""

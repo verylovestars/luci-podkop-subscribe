@@ -217,7 +217,12 @@ function refetchConfigsForSection(select) {
   // Remove old lists first
   removeConfigLists();
 
-  // If we have a URL, refetch with new mode
+  // Try to load from cache first, or fetch if we have a URL
+  autoLoadCachedConfigs(section_id, newType);
+  
+  // If we have a URL, we could also refetch (but cache should be enough)
+  // Uncomment below if you want to always refetch when changing modes
+  /*
   if (subscribeUrl && subscribeUrl.length > 0) {
     var subscribeContainer = subscribeInput.closest(".cbi-value") ||
                              subscribeInput.closest(".cbi-section") ||
@@ -231,6 +236,7 @@ function refetchConfigsForSection(select) {
 
     fetchConfigs(subscribeUrl, subscribeContainer, listId, false, section_id, isUrltest, isSelector);
   }
+  */
 }
 
 // Initialize change handlers for dropdowns
@@ -475,6 +481,26 @@ function createConfigListUI(configs, listId, isOutbound, section_id, isUrltest, 
     configList._selectorSelected = [];
   }
 
+  // Get current selected config for highlighting
+  var currentConfigUrl = null;
+  if (!isUrltest && !isSelector) {
+    var mode = isOutbound ? "outbound" : "url";
+    currentConfigUrl = getCurrentConfigUrl(section_id, mode);
+  }
+  
+  // For urltest/selector, get selected URLs from DynamicList
+  var selectedUrls = [];
+  if (isUrltest || isSelector) {
+    var fieldName = isUrltest ? "urltest_proxy_links" : "selector_proxy_links";
+    var baseId = "cbid.podkop." + section_id + "." + fieldName;
+    var hiddenInputs = document.querySelectorAll('input[type="hidden"][name="' + baseId + '"]');
+    hiddenInputs.forEach(function(input) {
+      if (input.value && input.value.trim()) {
+        selectedUrls.push(input.value.trim());
+      }
+    });
+  }
+
   configs.forEach(function (config, index) {
     var configItem = document.createElement("div");
     configItem.className = "podkop-subscribe-item";
@@ -483,6 +509,31 @@ function createConfigListUI(configs, listId, isOutbound, section_id, isUrltest, 
     var isXhttp = isXhttpConfig(config.url);
     if (isXhttp && !isOutbound) {
       configItem.classList.add("xhttp-disabled");
+    }
+    
+    // Highlight if this config is currently selected
+    var isCurrentlySelected = false;
+    if (isUrltest || isSelector) {
+      // Check if URL is in selected list
+      if (selectedUrls.indexOf(config.url) !== -1) {
+        configItem.classList.add("urltest-selected");
+        isCurrentlySelected = true;
+        // Add to internal selected array
+        if (isUrltest) {
+          if (!configList._urltestSelected) configList._urltestSelected = [];
+          if (configList._urltestSelected.indexOf(config.url) === -1) {
+            configList._urltestSelected.push(config.url);
+          }
+        } else if (isSelector) {
+          if (!configList._selectorSelected) configList._selectorSelected = [];
+          if (configList._selectorSelected.indexOf(config.url) === -1) {
+            configList._selectorSelected.push(config.url);
+          }
+        }
+      }
+    } else if (currentConfigUrl && config.url === currentConfigUrl) {
+      configItem.classList.add("selected");
+      isCurrentlySelected = true;
     }
 
     var configTitle = document.createElement("div");
@@ -525,6 +576,15 @@ function createConfigListUI(configs, listId, isOutbound, section_id, isUrltest, 
 
     configList.appendChild(configItem);
   });
+  
+  // Update counter for urltest/selector with pre-selected count
+  if (isUrltest || isSelector) {
+    var counterIdSuffix = isSelector ? "selector" : "urltest";
+    var counter = document.getElementById("podkop-subscribe-" + counterIdSuffix + "-counter-" + section_id);
+    if (counter) {
+      counter.textContent = _("Выбрано: ") + selectedUrls.length;
+    }
+  }
 
   contentContainer.appendChild(configList);
   configListContainer.appendChild(contentContainer);
@@ -937,6 +997,12 @@ function fetchConfigs(subscribeUrl, subscribeContainer, listId, isOutbound, sect
           var configs = result.configs;
           if (!subscribeContainer) return;
 
+          // Determine mode for cache
+          var mode = isOutbound ? "outbound" : (isUrltest ? "urltest" : (isSelector ? "selector" : "url"));
+          
+          // Save configs to cache
+          saveConfigsToCache(section_id, mode, configs);
+
           var configListContainer = createConfigListUI(
             configs,
             listId,
@@ -1001,6 +1067,150 @@ function showTemporaryError(container, message) {
   }, 5000);
 }
 
+// Save configs to cache
+function saveConfigsToCache(section_id, mode, configs) {
+  var xhr = new XMLHttpRequest();
+  xhr.open("POST", "/cgi-bin/podkop-configs-cache", true);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  
+  var data = {
+    section_id: section_id,
+    mode: mode,
+    data: {
+      configs: configs
+    }
+  };
+  
+  xhr.send(JSON.stringify(data));
+}
+
+// Load configs from cache
+function loadConfigsFromCache(section_id, mode, callback) {
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "/cgi-bin/podkop-configs-cache?section_id=" + encodeURIComponent(section_id) + "&mode=" + encodeURIComponent(mode), true);
+  
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200) {
+        try {
+          var result = JSON.parse(xhr.responseText);
+          if (result && result.configs && result.configs.length > 0) {
+            callback(result.configs);
+          } else {
+            callback(null);
+          }
+        } catch (e) {
+          callback(null);
+        }
+      } else {
+        callback(null);
+      }
+    }
+  };
+  
+  xhr.send();
+}
+
+// Get currently selected config URL
+function getCurrentConfigUrl(section_id, mode) {
+  if (mode === "url") {
+    // For URL mode, get proxy_string value
+    var proxyTextarea =
+      document.getElementById("widget.cbid.podkop." + section_id + ".proxy_string") ||
+      document.getElementById("cbid.podkop." + section_id + ".proxy_string");
+    return proxyTextarea ? proxyTextarea.value : null;
+  } else if (mode === "urltest" || mode === "selector") {
+    // For urltest/selector, we'll highlight all selected items
+    return null;
+  } else if (mode === "outbound") {
+    // For outbound, we don't have a direct way to know which was selected
+    return null;
+  }
+  return null;
+}
+
+// Auto-load cached configs for a section
+function autoLoadCachedConfigs(section_id, mode) {
+  loadConfigsFromCache(section_id, mode, function(configs) {
+    if (!configs || configs.length === 0) {
+      return; // No cached configs
+    }
+    
+    // Find subscribe container based on mode
+    var fieldName = (mode === "outbound") ? "subscribe_url_outbound" : "subscribe_url";
+    var subscribeInput = document.getElementById("widget.cbid.podkop." + section_id + "." + fieldName) ||
+                         document.getElementById("cbid.podkop." + section_id + "." + fieldName);
+    
+    if (!subscribeInput) {
+      return; // Subscribe input not found
+    }
+    
+    var subscribeContainer = subscribeInput.closest(".cbi-value") ||
+                             subscribeInput.closest(".cbi-section") ||
+                             subscribeInput.parentElement;
+    
+    if (!subscribeContainer) {
+      return;
+    }
+    
+    // Determine list ID and flags
+    var isOutbound = (mode === "outbound");
+    var isUrltest = (mode === "urltest");
+    var isSelector = (mode === "selector");
+    var listId = isOutbound
+      ? "podkop-subscribe-config-list-outbound-" + section_id
+      : (isUrltest ? "podkop-subscribe-config-list-urltest-" + section_id
+        : (isSelector ? "podkop-subscribe-config-list-selector-" + section_id
+          : "podkop-subscribe-config-list-" + section_id));
+    
+    // Remove any existing list
+    var existingList = document.getElementById(listId);
+    if (existingList && existingList.parentNode) {
+      existingList.parentNode.removeChild(existingList);
+    }
+    
+    // Create and display the cached config list
+    var configListContainer = createConfigListUI(
+      configs,
+      listId,
+      isOutbound,
+      section_id,
+      isUrltest,
+      isSelector
+    );
+    
+    if (subscribeContainer.nextSibling) {
+      subscribeContainer.parentNode.insertBefore(
+        configListContainer,
+        subscribeContainer.nextSibling
+      );
+    } else {
+      subscribeContainer.parentNode.appendChild(configListContainer);
+    }
+  });
+}
+
+// Initialize auto-load for all sections
+function initAutoLoadCachedConfigs() {
+  // Wait for DOM to be ready
+  setTimeout(function() {
+    // Find all proxy_config_type selects
+    var proxyConfigTypeSelects = document.querySelectorAll('select[id*="proxy_config_type"]');
+    
+    proxyConfigTypeSelects.forEach(function(select) {
+      var section_id = getSectionIdFromElement(select);
+      if (!section_id) return;
+      
+      var currentMode = select.value;
+      
+      // Only auto-load for modes that use subscribe
+      if (currentMode === "url" || currentMode === "urltest" || currentMode === "selector" || currentMode === "outbound") {
+        autoLoadCachedConfigs(section_id, currentMode);
+      }
+    });
+  }, 800);
+}
+
 function enhanceSectionWithSubscribe(section) {
   // Inject CSS styles
   injectSubscribeStyles();
@@ -1008,6 +1218,7 @@ function enhanceSectionWithSubscribe(section) {
   // Initialize handlers after DOM load
   setTimeout(function () {
     initConfigListHandlers();
+    initAutoLoadCachedConfigs();
   }, 500);
 
   // Subscribe URL for proxy_config_type = "url", "urltest" and "selector"
