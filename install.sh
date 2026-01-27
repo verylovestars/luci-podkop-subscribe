@@ -143,7 +143,83 @@ wget -q -O /usr/share/rpcd/acl.d/luci-app-podkop-subscribe.json "${BASE_URL}/usr
     exit 1
 }
 
-echo "Step 4: Restarting uhttpd..."
+echo "Step 4: Installing xray-core..."
+
+# Check if xray-core is already installed
+if opkg list-installed | grep -q "^xray-core "; then
+    echo "  ✓ xray-core is already installed"
+else
+    echo "  - Updating package list..."
+    opkg update >/dev/null 2>&1 || {
+        echo "  ⚠ Warning: Failed to update package list, trying to continue..."
+    }
+    
+    echo "  - Installing xray-core..."
+    opkg install xray-core || {
+        echo "  ⚠ Warning: Failed to install xray-core automatically"
+        echo "  Please install manually: opkg update && opkg install xray-core"
+    }
+fi
+
+echo "Step 5: Creating Xray init script..."
+
+# Check if xray init script already exists
+if [ -f /etc/init.d/xray ]; then
+    echo "  ✓ Xray init script already exists"
+else
+    cat > /etc/init.d/xray << 'EOF'
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+PROG=/usr/bin/xray
+
+validate_config() {
+    $PROG -test -config /etc/xray/config.json >/dev/null 2>&1
+}
+
+start_service() {
+    validate_config || {
+        echo "Xray: invalid config"
+        return 1
+    }
+    procd_open_instance
+    procd_set_param command $PROG -config /etc/xray/config.json
+    procd_set_param respawn 60 5 5
+    procd_set_param user root
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+EOF
+
+    chmod +x /etc/init.d/xray
+    echo "  ✓ Xray init script created"
+fi
+
+echo "Step 6: Enabling and starting Xray service..."
+
+# Enable xray service
+/etc/init.d/xray enable >/dev/null 2>&1 && echo "  ✓ Xray service enabled" || echo "  ⚠ Warning: Failed to enable Xray service"
+
+# Create config directory if it doesn't exist
+mkdir -p /etc/xray
+
+# Check if xray config exists
+if [ ! -f /etc/xray/config.json ]; then
+    echo "  ℹ No Xray config found, skipping service start"
+    echo "  Note: Xray will start automatically after you apply a configuration"
+else
+    # Try to start xray service
+    /etc/init.d/xray start >/dev/null 2>&1 && {
+        echo "  ✓ Xray service started"
+        /etc/init.d/xray status >/dev/null 2>&1 && echo "  ✓ Xray is running" || echo "  ⚠ Xray status unknown"
+    } || {
+        echo "  ℹ Xray service not started (config may be invalid or missing)"
+    }
+fi
+
+echo "Step 7: Restarting uhttpd..."
 /etc/init.d/uhttpd restart >/dev/null 2>&1 || true
 
 echo ""
@@ -158,10 +234,19 @@ echo "3. Set Connection Type to 'Proxy'"
 echo "4. Set Configuration Type to 'Connection URL' or 'Outbound Config'"
 echo "5. You should see the Subscribe URL field"
 echo ""
+echo "What was installed:"
+echo "  ✓ luci-app-podkop-subscribe plugin"
+echo "  ✓ xray-core package"
+echo "  ✓ Xray init script (/etc/init.d/xray)"
+echo "  ✓ Xray service enabled"
+echo ""
 echo "Features:"
 echo "  - Connection URL mode: Get configurations and apply to Podkop proxy"
 echo "  - Outbound Config mode: Get configurations and apply directly to Xray"
-echo "  - Supported protocols: vless://, ss://, trojan://, hy2://, hysteria2://"
+echo "  - URLTest mode: Auto-select best proxy based on latency"
+echo "  - Selector mode: Manually select from multiple proxies"
+echo "  - Auto-fill button: Quick Outbound configuration"
+echo "  - Supported protocols: vless://, ss://, trojan://, hy2://, hysteria2://, socks://"
 echo "  - Theme support: Automatically adapts to light/dark themes"
 echo ""
 echo "To uninstall, run:"
