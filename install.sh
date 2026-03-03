@@ -209,11 +209,7 @@ if [ "$INSTALL_XRAY" = "y" ]; then
 
     echo "Шаг 5: Создание скрипта инициализации Xray..."
 
-    # Проверка существования init скрипта xray
-    if [ -f /etc/init.d/xray ]; then
-        echo "  ✓ Скрипт инициализации Xray уже существует"
-    else
-        cat > /etc/init.d/xray << 'EOF'
+    cat > /etc/init.d/xray << 'EOF'
 #!/bin/sh /etc/rc.common
 
 START=99
@@ -239,9 +235,8 @@ start_service() {
 }
 EOF
 
-        chmod +x /etc/init.d/xray
-        echo "  ✓ Скрипт инициализации Xray создан"
-    fi
+    chmod +x /etc/init.d/xray
+    echo "  ✓ Скрипт инициализации Xray создан"
 
     echo "Шаг 6: Включение и запуск службы Xray..."
 
