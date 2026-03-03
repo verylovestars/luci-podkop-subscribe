@@ -222,7 +222,7 @@ validate_config() {
 
 start_service() {
     validate_config || {
-        echo "Xray: неверная конфигурация"
+        echo "Xray: invalid config"
         return 1
     }
     procd_open_instance
