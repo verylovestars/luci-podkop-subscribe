@@ -58,9 +58,15 @@ function injectSubscribeStyles() {
       font-size: 12px;
     }
     .podkop-subscribe-title {
-      margin-bottom: 10px;
+      margin-bottom: 6px;
       font-size: 14px;
       color: var(--text-color-medium, #666);
+    }
+    .podkop-subscribe-toolbar {
+      margin: 0 0 10px 0;
+    }
+    .podkop-subscribe-select-all {
+      font-size: 12px;
     }
     .podkop-subscribe-list {
       max-height: 300px;
@@ -471,6 +477,19 @@ function createConfigListUI(configs, listId, isOutbound, section_id, isUrltest, 
 
   contentContainer.appendChild(title);
 
+  var selectAllBtn = null;
+  if (isUrltest || isSelector) {
+    var toolbar = document.createElement("div");
+    toolbar.className = "podkop-subscribe-toolbar";
+
+    selectAllBtn = document.createElement("button");
+    selectAllBtn.type = "button";
+    selectAllBtn.className = "btn cbi-button cbi-button-action podkop-subscribe-select-all";
+    selectAllBtn.textContent = _("Выбрать все");
+    toolbar.appendChild(selectAllBtn);
+    contentContainer.appendChild(toolbar);
+  }
+
   var configList = document.createElement("div");
   configList.className = "podkop-subscribe-list";
 
@@ -591,6 +610,14 @@ function createConfigListUI(configs, listId, isOutbound, section_id, isUrltest, 
   } else {
     // For urltest/selector, render immediately
     renderConfigs(null);
+  }
+
+  if (selectAllBtn) {
+    selectAllBtn.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      selectAllConfigs(configList, configs, section_id, isUrltest, isSelector);
+    };
   }
 
   contentContainer.appendChild(configList);
@@ -947,6 +974,114 @@ function removeFromDynamicList(baseId, url, anchorEl) {
   return true;
 }
 
+// Select all available configs in URLTest/Selector mode
+function selectAllConfigs(configList, configs, section_id, isUrltest, isSelector) {
+  var fieldName = isUrltest ? "urltest_proxy_links" : "selector_proxy_links";
+  var baseId = "cbid.podkop." + section_id + "." + fieldName;
+  var counterIdSuffix = isSelector ? "selector" : "urltest";
+  var counter = document.getElementById(
+    "podkop-subscribe-" + counterIdSuffix + "-counter-" + section_id
+  );
+
+  var selectedUrls = [];
+  configs.forEach(function (config) {
+    if (!isXhttpConfig(config.url)) {
+      selectedUrls.push(config.url);
+    }
+  });
+
+  if (isUrltest) {
+    configList._urltestSelected = selectedUrls.slice();
+  } else {
+    configList._selectorSelected = selectedUrls.slice();
+  }
+
+  configList.querySelectorAll(".podkop-subscribe-item").forEach(function (item) {
+    var config = item._configData;
+    if (!config) {
+      return;
+    }
+
+    if (isXhttpConfig(config.url)) {
+      item.classList.remove("urltest-selected");
+      return;
+    }
+
+    item.classList.add("urltest-selected");
+  });
+
+  if (counter) {
+    counter.textContent = _("Выбрано: ") + selectedUrls.length;
+  }
+
+  bulkSetDynamicList(baseId, selectedUrls, configList);
+}
+
+// Bulk update DynamicList to match selected URLs in one pass (no scroll jump)
+function bulkSetDynamicList(baseId, selectedUrls, anchorEl) {
+  var currentUrls = getDynamicListUrls(baseId);
+  var toAdd = [];
+  var toRemove = [];
+
+  selectedUrls.forEach(function (url) {
+    if (currentUrls.indexOf(url) === -1) {
+      toAdd.push(url);
+    }
+  });
+
+  currentUrls.forEach(function (url) {
+    if (selectedUrls.indexOf(url) === -1) {
+      toRemove.push(url);
+    }
+  });
+
+  if (toAdd.length === 0 && toRemove.length === 0) {
+    return;
+  }
+
+  withScrollLock(function () {
+    var dl = findDynamicListWidget(baseId);
+    if (!dl) {
+      console.warn("Could not find DynamicList for:", baseId);
+      return;
+    }
+
+    toRemove.forEach(function (url) {
+      dl.querySelectorAll(".item").forEach(function (item) {
+        var hidden = item.querySelector('input[type="hidden"][name="' + baseId + '"]');
+        if (hidden && hidden.value === url && item.parentNode) {
+          item.parentNode.removeChild(item);
+        }
+      });
+    });
+
+    var addItem = dl.querySelector(".add-item");
+    if (!addItem) {
+      console.warn("Could not find .add-item in DynamicList:", baseId);
+      return;
+    }
+
+    toAdd.forEach(function (url) {
+      var exists = false;
+      dl.querySelectorAll(".item").forEach(function (item) {
+        var hidden = item.querySelector('input[type="hidden"][name="' + baseId + '"]');
+        if (hidden && hidden.value === url) {
+          exists = true;
+        }
+      });
+
+      if (exists) {
+        return;
+      }
+
+      var newItem = createDynamicListItem(baseId, url);
+      addItem.parentNode.insertBefore(newItem, addItem);
+    });
+
+    dispatchDynlistChange(dl, null, toAdd.length > 0);
+  }, anchorEl);
+}
+
 // Update urltest_proxy_links DynamicList field with selected configs (bulk sync)
 function updateUrltestProxyLinks(section_id, selectedUrls) {
   var baseId = "cbid.podkop." + section_id + ".urltest_proxy_links";
@@ -991,15 +1126,7 @@ function syncDynamicList(baseId, selectedUrls, fieldName) {
     return;
   }
 
-  // Bulk sync: apply removes then adds without per-item delays
-  withScrollLock(function() {
-    toRemove.forEach(function(url) {
-      removeFromDynamicList(baseId, url, null);
-    });
-    toAdd.forEach(function(url) {
-      addToDynamicList(baseId, url, null);
-    });
-  }, null);
+  bulkSetDynamicList(baseId, selectedUrls, null);
 }
 
 // Click handler for Outbound mode
