@@ -694,8 +694,13 @@ function createUrltestClickHandler(config, configItem, configList, section_id, i
       counter.textContent = _("Выбрано: ") + configList._urltestSelected.length;
     }
 
-    // Update the urltest_proxy_links DynamicList field
-    updateUrltestProxyLinks(section_id, configList._urltestSelected);
+    // Update the urltest_proxy_links DynamicList field (incremental — no full rebuild)
+    var baseId = "cbid.podkop." + section_id + ".urltest_proxy_links";
+    if (isCurrentlySelected) {
+      removeFromDynamicList(baseId, config.url);
+    } else {
+      addToDynamicList(baseId, config.url);
+    }
   };
 }
 
@@ -744,26 +749,31 @@ function createSelectorClickHandler(config, configItem, configList, section_id, 
       counter.textContent = _("Выбрано: ") + configList._selectorSelected.length;
     }
 
-    // Update the selector_proxy_links DynamicList field
-    updateSelectorProxyLinks(section_id, configList._selectorSelected);
+    // Update the selector_proxy_links DynamicList field (incremental — no full rebuild)
+    var baseId = "cbid.podkop." + section_id + ".selector_proxy_links";
+    if (isCurrentlySelected) {
+      removeFromDynamicList(baseId, config.url);
+    } else {
+      addToDynamicList(baseId, config.url);
+    }
   };
 }
 
-// Update urltest_proxy_links DynamicList field with selected configs
-function updateUrltestProxyLinks(section_id, selectedUrls) {
-  var baseId = "cbid.podkop." + section_id + ".urltest_proxy_links";
-  updateDynamicList(section_id, baseId, selectedUrls, "urltest_proxy_links");
+// Preserve page scroll position while updating DOM (prevents jump on DynamicList changes)
+function preserveScroll(fn) {
+  var scrollX = window.pageXOffset || document.documentElement.scrollLeft || 0;
+  var scrollY = window.pageYOffset || document.documentElement.scrollTop || 0;
+
+  fn();
+
+  window.scrollTo(scrollX, scrollY);
+  requestAnimationFrame(function() {
+    window.scrollTo(scrollX, scrollY);
+  });
 }
 
-// Update selector_proxy_links DynamicList field with selected configs
-function updateSelectorProxyLinks(section_id, selectedUrls) {
-  var baseId = "cbid.podkop." + section_id + ".selector_proxy_links";
-  updateDynamicList(section_id, baseId, selectedUrls, "selector_proxy_links");
-}
-
-// Helper to update any DynamicList
-function updateDynamicList(section_id, baseId, selectedUrls, fieldName) {
-  // Find the DynamicList widget container
+// Find LuCI DynamicList widget and its add-input
+function findDynamicListElements(baseId) {
   var dynlistWidget = document.querySelector(
     '.cbi-dynlist input[name="' + baseId + '"]'
   );
@@ -773,7 +783,6 @@ function updateDynamicList(section_id, baseId, selectedUrls, fieldName) {
   }
 
   if (!dynlistWidget) {
-    // Try finding by ID
     var widgetId = "widget." + baseId;
     var node = document.getElementById(widgetId);
     if (node) {
@@ -782,46 +791,51 @@ function updateDynamicList(section_id, baseId, selectedUrls, fieldName) {
   }
 
   if (!dynlistWidget) {
-    console.warn("Could not find " + fieldName + " for section:", section_id);
-    return;
+    return null;
   }
 
-  // Find the text input used for adding items
   var addInput = dynlistWidget.querySelector('input[type="text"]');
-
   if (!addInput) {
-    console.warn("Could not find add input in DynamicList");
-    return;
+    return null;
   }
 
-  // Step 1: Remove ALL existing items from DOM
-  // Remove .item divs
-  var existingItems = dynlistWidget.querySelectorAll('.item');
-  existingItems.forEach(function(item) {
-    item.parentNode.removeChild(item);
-  });
+  return { widget: dynlistWidget, addInput: addInput };
+}
 
-  // Remove hidden inputs with our name
-  var existingInputs = document.querySelectorAll('input[type="hidden"][name="' + baseId + '"]');
-  existingInputs.forEach(function(input) {
-    input.parentNode.removeChild(input);
-  });
-
-  // Also remove any inputs inside dynlist with our name
-  var dynlistInputs = dynlistWidget.querySelectorAll('input[name="' + baseId + '"]');
-  dynlistInputs.forEach(function(input) {
-    if (input !== addInput && input.type !== 'text') {
-      input.parentNode.removeChild(input);
+// Read current values from DynamicList hidden inputs
+function getDynamicListUrls(baseId) {
+  var urls = [];
+  document.querySelectorAll('input[type="hidden"][name="' + baseId + '"]').forEach(function(input) {
+    if (input.value && input.value.trim()) {
+      urls.push(input.value.trim());
     }
   });
+  return urls;
+}
 
-  // Step 2: Add new items by simulating Enter key
-  function addItem(url) {
+// Add a single item to DynamicList without rebuilding the whole list
+function addToDynamicList(baseId, url) {
+  if (!url) {
+    return false;
+  }
+
+  var els = findDynamicListElements(baseId);
+  if (!els) {
+    console.warn("Could not find DynamicList for:", baseId);
+    return false;
+  }
+
+  if (getDynamicListUrls(baseId).indexOf(url) !== -1) {
+    return true;
+  }
+
+  preserveScroll(function() {
+    var addInput = els.addInput;
+
     addInput.value = url;
     addInput.dispatchEvent(new Event('input', { bubbles: true }));
     addInput.dispatchEvent(new Event('change', { bubbles: true }));
 
-    // Simulate Enter keypress
     var keydownEvent = new KeyboardEvent('keydown', {
       key: 'Enter',
       code: 'Enter',
@@ -841,23 +855,118 @@ function updateDynamicList(section_id, baseId, selectedUrls, fieldName) {
       cancelable: true
     });
     addInput.dispatchEvent(keypressEvent);
-  }
 
-  // Add items with delay
-  var delay = 100; // Start with small delay after clearing
-  selectedUrls.forEach(function(url, index) {
-    setTimeout(function() {
-      addItem(url);
-    }, delay);
-    delay += 100;
+    addInput.value = '';
+    if (typeof addInput.blur === 'function') {
+      addInput.blur();
+    }
+
+    els.widget.dispatchEvent(new Event('change', { bubbles: true }));
   });
 
-  // Clear input after all items added
-  setTimeout(function() {
-    addInput.value = '';
-    // Trigger change to update form state
-    dynlistWidget.dispatchEvent(new Event('change', { bubbles: true }));
-  }, delay + 100);
+  return true;
+}
+
+// Remove a single item from DynamicList without rebuilding the whole list
+function removeFromDynamicList(baseId, url) {
+  if (!url) {
+    return false;
+  }
+
+  var els = findDynamicListElements(baseId);
+  if (!els) {
+    console.warn("Could not find DynamicList for:", baseId);
+    return false;
+  }
+
+  preserveScroll(function() {
+    var removed = false;
+    var items = els.widget.querySelectorAll('.item');
+
+    items.forEach(function(item) {
+      if (removed) {
+        return;
+      }
+
+      var hidden = item.querySelector('input[type="hidden"][name="' + baseId + '"]');
+      if (!hidden || hidden.value !== url) {
+        return;
+      }
+
+      var removeBtn = item.querySelector('.cbi-button-remove, button[name="cbi.rts"], .btn.remove');
+      if (removeBtn) {
+        removeBtn.click();
+      } else {
+        item.parentNode.removeChild(item);
+        if (hidden.parentNode) {
+          hidden.parentNode.removeChild(hidden);
+        }
+      }
+
+      removed = true;
+    });
+
+    if (removed) {
+      els.widget.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+
+  return true;
+}
+
+// Update urltest_proxy_links DynamicList field with selected configs (bulk sync)
+function updateUrltestProxyLinks(section_id, selectedUrls) {
+  var baseId = "cbid.podkop." + section_id + ".urltest_proxy_links";
+  syncDynamicList(baseId, selectedUrls, "urltest_proxy_links");
+}
+
+// Update selector_proxy_links DynamicList field with selected configs (bulk sync)
+function updateSelectorProxyLinks(section_id, selectedUrls) {
+  var baseId = "cbid.podkop." + section_id + ".selector_proxy_links";
+  syncDynamicList(baseId, selectedUrls, "selector_proxy_links");
+}
+
+// Sync DynamicList to match selectedUrls (used only for bulk/initial sync)
+function syncDynamicList(baseId, selectedUrls, fieldName) {
+  var currentUrls = getDynamicListUrls(baseId);
+  var toAdd = [];
+  var toRemove = [];
+
+  selectedUrls.forEach(function(url) {
+    if (currentUrls.indexOf(url) === -1) {
+      toAdd.push(url);
+    }
+  });
+
+  currentUrls.forEach(function(url) {
+    if (selectedUrls.indexOf(url) === -1) {
+      toRemove.push(url);
+    }
+  });
+
+  if (toAdd.length === 0 && toRemove.length === 0) {
+    return;
+  }
+
+  // Single toggle — use incremental path
+  if (toAdd.length === 1 && toRemove.length === 0) {
+    addToDynamicList(baseId, toAdd[0]);
+    return;
+  }
+  if (toRemove.length === 1 && toAdd.length === 0) {
+    removeFromDynamicList(baseId, toRemove[0]);
+    return;
+  }
+
+  // Bulk sync: apply removes then adds without per-item delays
+  preserveScroll(function() {
+    toRemove.forEach(function(url) {
+      removeFromDynamicList(baseId, url);
+    });
+    toAdd.forEach(function(url) {
+      addToDynamicList(baseId, url);
+    });
+  });
 }
 
 // Click handler for Outbound mode
