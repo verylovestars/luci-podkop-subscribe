@@ -694,12 +694,12 @@ function createUrltestClickHandler(config, configItem, configList, section_id, i
       counter.textContent = _("Выбрано: ") + configList._urltestSelected.length;
     }
 
-    // Update the urltest_proxy_links DynamicList field (incremental — no full rebuild)
+    // Update the urltest_proxy_links DynamicList field (incremental, no focus/scroll jump)
     var baseId = "cbid.podkop." + section_id + ".urltest_proxy_links";
     if (isCurrentlySelected) {
-      removeFromDynamicList(baseId, config.url);
+      removeFromDynamicList(baseId, config.url, configItem);
     } else {
-      addToDynamicList(baseId, config.url);
+      addToDynamicList(baseId, config.url, configItem);
     }
   };
 }
@@ -749,57 +749,122 @@ function createSelectorClickHandler(config, configItem, configList, section_id, 
       counter.textContent = _("Выбрано: ") + configList._selectorSelected.length;
     }
 
-    // Update the selector_proxy_links DynamicList field (incremental — no full rebuild)
+    // Update the selector_proxy_links DynamicList field (incremental, no focus/scroll jump)
     var baseId = "cbid.podkop." + section_id + ".selector_proxy_links";
     if (isCurrentlySelected) {
-      removeFromDynamicList(baseId, config.url);
+      removeFromDynamicList(baseId, config.url, configItem);
     } else {
-      addToDynamicList(baseId, config.url);
+      addToDynamicList(baseId, config.url, configItem);
     }
   };
 }
 
-// Preserve page scroll position while updating DOM (prevents jump on DynamicList changes)
-function preserveScroll(fn) {
-  var scrollX = window.pageXOffset || document.documentElement.scrollLeft || 0;
-  var scrollY = window.pageYOffset || document.documentElement.scrollTop || 0;
+// Keep viewport stable while DynamicList DOM grows below the fold
+function withScrollLock(fn, anchorEl) {
+  var scrollEl = document.scrollingElement || document.documentElement;
+  var scrollX = window.pageXOffset || scrollEl.scrollLeft || 0;
+  var scrollY = window.pageYOffset || scrollEl.scrollTop || 0;
+  var anchorTop = anchorEl ? anchorEl.getBoundingClientRect().top : null;
+
+  function restoreScroll() {
+    if (anchorEl && anchorTop !== null) {
+      var delta = anchorEl.getBoundingClientRect().top - anchorTop;
+      if (Math.abs(delta) > 0.5) {
+        window.scrollBy(0, delta);
+      }
+      return;
+    }
+
+    window.scrollTo(scrollX, scrollY);
+  }
 
   fn();
 
-  window.scrollTo(scrollX, scrollY);
+  restoreScroll();
+  requestAnimationFrame(restoreScroll);
   requestAnimationFrame(function() {
-    window.scrollTo(scrollX, scrollY);
+    requestAnimationFrame(restoreScroll);
   });
+  setTimeout(restoreScroll, 0);
+  setTimeout(restoreScroll, 50);
+  setTimeout(restoreScroll, 150);
 }
 
-// Find LuCI DynamicList widget and its add-input
-function findDynamicListElements(baseId) {
-  var dynlistWidget = document.querySelector(
-    '.cbi-dynlist input[name="' + baseId + '"]'
-  );
-
-  if (dynlistWidget) {
-    dynlistWidget = dynlistWidget.closest('.cbi-dynlist');
-  }
-
-  if (!dynlistWidget) {
-    var widgetId = "widget." + baseId;
-    var node = document.getElementById(widgetId);
-    if (node) {
-      dynlistWidget = node.closest('.cbi-dynlist') || node.parentElement;
+// Find LuCI DynamicList root element for a field
+function findDynamicListWidget(baseId) {
+  var widgetNode = document.getElementById("widget." + baseId);
+  if (widgetNode) {
+    var dl = widgetNode.closest(".cbi-dynlist") || widgetNode.querySelector(".cbi-dynlist");
+    if (dl) {
+      return dl;
     }
   }
 
-  if (!dynlistWidget) {
-    return null;
+  var cbidNode = document.getElementById(baseId);
+  if (cbidNode) {
+    var dlFromCbid = cbidNode.closest(".cbi-dynlist");
+    if (dlFromCbid) {
+      return dlFromCbid;
+    }
   }
 
-  var addInput = dynlistWidget.querySelector('input[type="text"]');
-  if (!addInput) {
-    return null;
+  var dynlists = document.querySelectorAll(".cbi-dynlist");
+  for (var i = 0; i < dynlists.length; i++) {
+    var addItem = dynlists[i].querySelector(".add-item");
+    if (!addItem) {
+      continue;
+    }
+
+    var textInput = addItem.querySelector('input[type="text"]');
+    if (
+      textInput &&
+      (textInput.id === baseId ||
+        textInput.name === baseId ||
+        textInput.id === "widget." + baseId)
+    ) {
+      return dynlists[i];
+    }
   }
 
-  return { widget: dynlistWidget, addInput: addInput };
+  var hidden = document.querySelector('input[type="hidden"][name="' + baseId + '"]');
+  if (hidden) {
+    return hidden.closest(".cbi-dynlist");
+  }
+
+  return null;
+}
+
+// Create a DynamicList item node matching LuCI markup (without flash animation)
+function createDynamicListItem(baseId, url) {
+  var item = document.createElement("div");
+  item.className = "item";
+  item.tabIndex = 0;
+  item.draggable = true;
+
+  var label = document.createElement("span");
+  label.textContent = url;
+  item.appendChild(label);
+
+  var hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.name = baseId;
+  hidden.value = url;
+  item.appendChild(hidden);
+
+  return item;
+}
+
+// Notify LuCI form that DynamicList value changed
+function dispatchDynlistChange(dl, value, isAdd) {
+  dl.dispatchEvent(
+    new CustomEvent("cbi-dynlist-change", {
+      bubbles: true,
+      detail: {
+        value: value,
+        add: isAdd,
+      },
+    })
+  );
 }
 
 // Read current values from DynamicList hidden inputs
@@ -813,15 +878,9 @@ function getDynamicListUrls(baseId) {
   return urls;
 }
 
-// Add a single item to DynamicList without rebuilding the whole list
-function addToDynamicList(baseId, url) {
+// Add a single item to DynamicList without focusing the add-input (prevents scroll jump)
+function addToDynamicList(baseId, url, anchorEl) {
   if (!url) {
-    return false;
-  }
-
-  var els = findDynamicListElements(baseId);
-  if (!els) {
-    console.warn("Could not find DynamicList for:", baseId);
     return false;
   }
 
@@ -829,59 +888,42 @@ function addToDynamicList(baseId, url) {
     return true;
   }
 
-  preserveScroll(function() {
-    var addInput = els.addInput;
-
-    addInput.value = url;
-    addInput.dispatchEvent(new Event('input', { bubbles: true }));
-    addInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-    var keydownEvent = new KeyboardEvent('keydown', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true
-    });
-    addInput.dispatchEvent(keydownEvent);
-
-    var keypressEvent = new KeyboardEvent('keypress', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true
-    });
-    addInput.dispatchEvent(keypressEvent);
-
-    addInput.value = '';
-    if (typeof addInput.blur === 'function') {
-      addInput.blur();
-    }
-
-    els.widget.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-
-  return true;
-}
-
-// Remove a single item from DynamicList without rebuilding the whole list
-function removeFromDynamicList(baseId, url) {
-  if (!url) {
-    return false;
-  }
-
-  var els = findDynamicListElements(baseId);
-  if (!els) {
+  var dl = findDynamicListWidget(baseId);
+  if (!dl) {
     console.warn("Could not find DynamicList for:", baseId);
     return false;
   }
 
-  preserveScroll(function() {
+  withScrollLock(function() {
+    var addItem = dl.querySelector(".add-item");
+    if (!addItem) {
+      console.warn("Could not find .add-item in DynamicList:", baseId);
+      return;
+    }
+
+    var newItem = createDynamicListItem(baseId, url);
+    addItem.parentNode.insertBefore(newItem, addItem);
+    dispatchDynlistChange(dl, url, true);
+  }, anchorEl);
+
+  return true;
+}
+
+// Remove a single item from DynamicList without focusing the add-input
+function removeFromDynamicList(baseId, url, anchorEl) {
+  if (!url) {
+    return false;
+  }
+
+  var dl = findDynamicListWidget(baseId);
+  if (!dl) {
+    console.warn("Could not find DynamicList for:", baseId);
+    return false;
+  }
+
+  withScrollLock(function() {
     var removed = false;
-    var items = els.widget.querySelectorAll('.item');
+    var items = dl.querySelectorAll(".item");
 
     items.forEach(function(item) {
       if (removed) {
@@ -893,23 +935,14 @@ function removeFromDynamicList(baseId, url) {
         return;
       }
 
-      var removeBtn = item.querySelector('.cbi-button-remove, button[name="cbi.rts"], .btn.remove');
-      if (removeBtn) {
-        removeBtn.click();
-      } else {
-        item.parentNode.removeChild(item);
-        if (hidden.parentNode) {
-          hidden.parentNode.removeChild(hidden);
-        }
-      }
-
+      item.parentNode.removeChild(item);
       removed = true;
     });
 
     if (removed) {
-      els.widget.dispatchEvent(new Event('change', { bubbles: true }));
+      dispatchDynlistChange(dl, url, false);
     }
-  });
+  }, anchorEl);
 
   return true;
 }
@@ -959,14 +992,14 @@ function syncDynamicList(baseId, selectedUrls, fieldName) {
   }
 
   // Bulk sync: apply removes then adds without per-item delays
-  preserveScroll(function() {
+  withScrollLock(function() {
     toRemove.forEach(function(url) {
-      removeFromDynamicList(baseId, url);
+      removeFromDynamicList(baseId, url, null);
     });
     toAdd.forEach(function(url) {
-      addToDynamicList(baseId, url);
+      addToDynamicList(baseId, url, null);
     });
-  });
+  }, null);
 }
 
 // Click handler for Outbound mode
