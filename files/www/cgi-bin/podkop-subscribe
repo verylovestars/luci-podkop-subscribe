@@ -44,12 +44,38 @@ if [ ! -s "$tmpfile" ]; then
     exit 1
 fi
 
-# Decode base64
-if ! base64 -d "$tmpfile" > "$decoded_file" 2>/dev/null; then
-    json_init
-    json_add_string "error" "Failed to decode base64"
-    json_dump
-    exit 1
+# Detect whether a file already contains proxy links (plaintext subscription)
+has_scheme() {
+    grep -qE '(vless|vmess|ss|trojan|hy2|hysteria2|socks[45]?)://' "$1" 2>/dev/null
+}
+
+# Robustly resolve the subscription body into a list of proxy links.
+# Handles three response formats:
+#   1. plaintext link list (already decoded)
+#   2. standard base64
+#   3. URL-safe base64 ('-'/'_') with missing padding
+if has_scheme "$tmpfile"; then
+    # Already plaintext, use as-is
+    cp "$tmpfile" "$decoded_file"
+else
+    # Normalize: strip whitespace, URL-safe -> standard alphabet
+    b64=$(tr -d '[:space:]' < "$tmpfile" | tr '_-' '/+')
+
+    # Fix padding to a multiple of 4 (a remainder of 2 or 3 is paddable;
+    # 1 is invalid and left for base64 -d to reject -> raw fallback below)
+    rem=$(( ${#b64} % 4 ))
+    if [ "$rem" -eq 2 ]; then
+        b64="${b64}=="
+    elif [ "$rem" -eq 3 ]; then
+        b64="${b64}="
+    fi
+
+    printf '%s' "$b64" | base64 -d > "$decoded_file" 2>/dev/null
+
+    # If decode failed or produced no recognizable links, fall back to raw body
+    if [ ! -s "$decoded_file" ] || ! has_scheme "$decoded_file"; then
+        cp "$tmpfile" "$decoded_file"
+    fi
 fi
 
 # URL decode function using printf
