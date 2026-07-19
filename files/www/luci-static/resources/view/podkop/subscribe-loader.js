@@ -371,6 +371,19 @@
     container.appendChild(listContainer);
   }
 
+  // Percent-encode the "#name" fragment so the URL is valid for Podkop/Xray
+  function encodeProxyUrl(url) {
+    if (!url || typeof url !== "string") return url;
+    var hashIdx = url.indexOf("#");
+    if (hashIdx === -1) return url;
+    var base = url.slice(0, hashIdx);
+    var fragment = url.slice(hashIdx + 1);
+    try {
+      fragment = decodeURIComponent(fragment);
+    } catch (e) {}
+    return base + "#" + encodeURIComponent(fragment);
+  }
+
   // Select configuration
   function selectConfig(config, item, list, sectionContainer) {
     // Find proxy_string textarea
@@ -380,7 +393,7 @@
     }
 
     if (proxyTextarea) {
-      proxyTextarea.value = config.url;
+      proxyTextarea.value = encodeProxyUrl(config.url);
       proxyTextarea.dispatchEvent(new Event("change", { bubbles: true }));
       proxyTextarea.dispatchEvent(new Event("input", { bubbles: true }));
     }

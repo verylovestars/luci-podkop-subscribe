@@ -371,6 +371,24 @@ function shouldShowConfigList() {
   return false;
 }
 
+// Normalize a proxy URL so it can be safely stored in Podkop's config.
+// Subscription links often carry a raw UTF-8 / space-containing name in the
+// "#fragment", which Podkop/Xray reject. Percent-encode the fragment (after
+// decoding first to avoid double-encoding) so the emitted URL is valid.
+function encodeProxyUrl(url) {
+  if (!url || typeof url !== "string") return url;
+  var hashIdx = url.indexOf("#");
+  if (hashIdx === -1) return url;
+  var base = url.slice(0, hashIdx);
+  var fragment = url.slice(hashIdx + 1);
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch (e) {
+    // already-decoded or malformed encoding: encode what we have
+  }
+  return base + "#" + encodeURIComponent(fragment);
+}
+
 // Check if config URL contains xhttp transport type
 function isXhttpConfig(url) {
   if (!url || typeof url !== "string") return false;
@@ -1272,6 +1290,12 @@ function fetchConfigs(subscribeUrl, subscribeContainer, listId, isOutbound, sect
 
           var configs = result.configs;
           if (!subscribeContainer) return;
+
+          // Percent-encode the name fragment of every URL so it is valid when
+          // applied to Podkop / Xray (cache stores the normalized form too).
+          configs.forEach(function (c) {
+            c.url = encodeProxyUrl(c.url);
+          });
 
           // Determine mode for cache
           var mode = isOutbound ? "outbound" : (isUrltest ? "urltest" : (isSelector ? "selector" : "url"));
