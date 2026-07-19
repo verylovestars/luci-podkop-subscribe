@@ -23,7 +23,7 @@
 Одной командой устанавливается всё необходимое:
 
 ```bash
-sh <(wget -O - https://raw.githubusercontent.com/mr-Abdrahimov/luci-podkop-subscribe/main/install.sh)
+sh <(wget -O - https://raw.githubusercontent.com/verylovestars/luci-podkop-subscribe/main/install.sh)
 ```
 
 **Интерактивная установка:**
@@ -42,7 +42,7 @@ sh <(wget -O - https://raw.githubusercontent.com/mr-Abdrahimov/luci-podkop-subsc
 ## Удаление
 
 ```bash
-sh <(wget -O - https://raw.githubusercontent.com/mr-Abdrahimov/luci-podkop-subscribe/main/uninstall.sh)
+sh <(wget -O - https://raw.githubusercontent.com/verylovestars/luci-podkop-subscribe/main/uninstall.sh)
 ```
 
 ## Описание
@@ -598,7 +598,7 @@ mkdir -p /etc/xray
 Просто запустите install.sh снова - он обновит все файлы:
 
 ```bash
-sh <(wget -O - https://raw.githubusercontent.com/mr-Abdrahimov/luci-podkop-subscribe/main/install.sh)
+sh <(wget -O - https://raw.githubusercontent.com/verylovestars/luci-podkop-subscribe/main/install.sh)
 ```
 
 ### Безопасно ли хранить Subscribe URL в конфигурации?
