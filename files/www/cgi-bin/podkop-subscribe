@@ -23,13 +23,15 @@ decoded_file="/tmp/podkop_subscribe_decoded_$$"
 
 # Cleanup function
 cleanup() {
-    rm -f "$tmpfile" "$decoded_file"
+    rm -f "$tmpfile" "$decoded_file" "$tmpfile.gz"
 }
 trap cleanup EXIT
 
 # Fetch the subscribe URL
-# Use 'v2rayNG' User-Agent to get base64 encoded protocol links
-if ! wget -q -O "$tmpfile" --timeout=30 --user-agent="v2rayNG" "$url" 2>/dev/null; then
+# Use 'v2ray' User-Agent to get plain base64 protocol links. Some panels
+# reply to 'v2rayNG'/browser UAs with a gzipped, malformed-chunked body that
+# truncates and decodes to garbage; 'v2ray' returns clean identity-encoded text.
+if ! wget -q -O "$tmpfile" --timeout=30 --user-agent="v2ray" "$url" 2>/dev/null; then
     json_init
     json_add_string "error" "Failed to fetch URL"
     json_dump
@@ -42,6 +44,14 @@ if [ ! -s "$tmpfile" ]; then
     json_add_string "error" "Empty response from server"
     json_dump
     exit 1
+fi
+
+# Some panels gzip the response body, and BusyBox wget does not inflate it.
+# If the body is gzip-compressed, decompress it in place before decoding.
+if gzip -dc "$tmpfile" > "$tmpfile.gz" 2>/dev/null && [ -s "$tmpfile.gz" ]; then
+    mv "$tmpfile.gz" "$tmpfile"
+else
+    rm -f "$tmpfile.gz"
 fi
 
 # Detect whether a file already contains proxy links (plaintext subscription)
@@ -58,8 +68,11 @@ if has_scheme "$tmpfile"; then
     # Already plaintext, use as-is
     cp "$tmpfile" "$decoded_file"
 else
-    # Normalize: strip whitespace, URL-safe -> standard alphabet
-    b64=$(tr -d '[:space:]' < "$tmpfile" | tr '_-' '/+')
+    # Normalize: strip whitespace, URL-safe -> standard alphabet.
+    # NOTE: BusyBox tr does NOT support the [:space:] POSIX class; passing it
+    # deletes the literal letters s,p,a,c,e (all valid base64 chars) and
+    # corrupts the body. Strip whitespace with an explicit character set.
+    b64=$(tr -d ' \t\r\n' < "$tmpfile" | tr '_-' '/+')
 
     # Fix padding to a multiple of 4 (a remainder of 2 or 3 is paddable;
     # 1 is invalid and left for base64 -d to reject -> raw fallback below)
